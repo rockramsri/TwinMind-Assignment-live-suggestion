@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useMemo, useState } from "react";
 
 import { CardThreadMessage, SuggestionCard } from "../lib/types";
 
@@ -10,6 +10,58 @@ interface CardChatPanelProps {
   isLoadingOpen: boolean;
   isSending: boolean;
   onSend: (message: string) => Promise<void>;
+}
+
+function formatTopicLabel(topicId: string): string {
+  return topicId.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function cleanAssistantText(text: string): string {
+  return text
+    .replace(/\[chunk_[^\]]+\]/gi, "")
+    .replace(/\(chunk_[^)]+\)/gi, "")
+    .replace(/\bchunk_[a-z0-9_]+\b/gi, "")
+    .replace(/^Sources:\s.*$/gim, "")
+    .trim();
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function MarkdownMessage({ text }: { text: string }) {
+  const cleaned = cleanAssistantText(text);
+  const blocks = cleaned.split(/\n{2,}/).filter(Boolean);
+  return (
+    <div className="space-y-2">
+      {blocks.map((block, blockIndex) => {
+        const lines = block.split("\n").filter(Boolean);
+        const isList = lines.every((line) => /^[-*]\s+/.test(line.trim()));
+        if (isList) {
+          return (
+            <ul key={blockIndex} className="list-disc space-y-1 pl-5">
+              {lines.map((line, lineIndex) => (
+                <li key={`${blockIndex}-${lineIndex}`}>
+                  {renderInlineMarkdown(line.replace(/^[-*]\s+/, ""))}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={blockIndex} className="leading-relaxed">
+            {renderInlineMarkdown(lines.join(" "))}
+          </p>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function CardChatPanel({
@@ -57,6 +109,18 @@ export default function CardChatPanel({
       <div className="border-b border-panelBorder px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-100">{selectedCard.title}</h2>
         <p className="text-xs text-slate-400">{selectedCard.type}</p>
+        {selectedCard.topic_ids.length ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {selectedCard.topic_ids.slice(0, 4).map((topicId) => (
+              <span
+                key={topicId}
+                className="rounded-full border border-cyan-700/60 bg-cyan-950/40 px-2 py-0.5 text-[10px] text-cyan-100"
+              >
+                {formatTopicLabel(topicId)}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
@@ -75,7 +139,30 @@ export default function CardChatPanel({
             }`}
           >
             <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-400">{message.role}</div>
-            <p className="whitespace-pre-wrap">{message.text}</p>
+            {message.role === "assistant" ? (
+              <>
+                <MarkdownMessage text={message.text} />
+                {selectedCard.topic_ids.length ? (
+                  <div className="mt-3 border-t border-cyan-800/50 pt-2">
+                    <div className="mb-1 text-[10px] uppercase tracking-wide text-cyan-200/70">
+                      Source topics
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedCard.topic_ids.slice(0, 4).map((topicId) => (
+                        <span
+                          key={`${message.created_at_ms}-${topicId}`}
+                          className="rounded-full border border-cyan-700/60 bg-cyan-950/40 px-2 py-0.5 text-[10px] text-cyan-100"
+                        >
+                          {formatTopicLabel(topicId)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="whitespace-pre-wrap">{message.text}</p>
+            )}
           </div>
         ))}
       </div>

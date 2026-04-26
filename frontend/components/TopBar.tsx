@@ -10,6 +10,8 @@ interface TopBarProps {
   onExport: () => void;
   onRefresh: () => void;
   disableActions?: boolean;
+  isRefreshing?: boolean;
+  lastRefreshMs?: number | null;
 }
 
 export default function TopBar({
@@ -19,7 +21,9 @@ export default function TopBar({
   onOpenSettings,
   onExport,
   onRefresh,
-  disableActions = false
+  disableActions = false,
+  isRefreshing = false,
+  lastRefreshMs = null
 }: TopBarProps) {
   return (
     <header className="flex items-center justify-between gap-4 border-b border-panelBorder bg-panel px-4 py-3">
@@ -34,11 +38,16 @@ export default function TopBar({
         <button
           type="button"
           onClick={onRefresh}
-          disabled={disableActions}
+          disabled={disableActions || isRefreshing}
           className="rounded-md border border-panelBorder bg-panelSoft px-3 py-2 text-sm text-slate-100 disabled:opacity-50"
         >
-          Refresh now
+          {isRefreshing ? "Refreshing..." : "Refresh now"}
         </button>
+        {lastRefreshMs !== null ? (
+          <span className="text-xs text-slate-400">
+            last: {(lastRefreshMs / 1000).toFixed(1)}s
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={onExport}

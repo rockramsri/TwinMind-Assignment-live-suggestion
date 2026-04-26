@@ -5,6 +5,7 @@ import { SuggestionCard as SuggestionCardType } from "../lib/types";
 interface SuggestionCardProps {
   card: SuggestionCardType;
   selected: boolean;
+  covered?: boolean;
   onClick: () => void;
 }
 
@@ -25,7 +26,12 @@ function badgeColor(type: SuggestionCardType["type"]): string {
   }
 }
 
-export default function SuggestionCard({ card, selected, onClick }: SuggestionCardProps) {
+export default function SuggestionCard({
+  card,
+  selected,
+  covered = false,
+  onClick
+}: SuggestionCardProps) {
   return (
     <button
       type="button"
@@ -34,15 +40,24 @@ export default function SuggestionCard({ card, selected, onClick }: SuggestionCa
         selected
           ? "border-accentStrong bg-cyan-900/20"
           : "border-panelBorder bg-panelSoft hover:border-cyan-500/60"
-      }`}
+      } ${covered ? "opacity-70" : ""}`}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className={`rounded px-2 py-1 text-xs font-semibold ${badgeColor(card.type)}`}>
           {card.type}
         </span>
-        <span className="text-xs text-slate-300">priority: {card.priority}</span>
+        <div className="flex items-center gap-2">
+          {covered ? (
+            <span className="rounded-full border border-emerald-600/60 bg-emerald-950/50 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
+              covered
+            </span>
+          ) : null}
+          <span className="text-xs text-slate-300">priority: {card.priority}</span>
+        </div>
       </div>
-      <h3 className="text-sm font-semibold text-white">{card.title}</h3>
+      <h3 className={`text-sm font-semibold text-white ${covered ? "line-through decoration-emerald-300/70" : ""}`}>
+        {card.title}
+      </h3>
       <p className="mt-1 text-sm text-slate-200">{card.preview}</p>
       <p className="mt-2 text-xs text-slate-400">{card.why_now}</p>
     </button>

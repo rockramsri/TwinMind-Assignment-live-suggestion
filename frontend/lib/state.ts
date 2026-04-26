@@ -15,6 +15,7 @@ export interface TranscriptStreamEntry {
   startMs: number;
   endMs: number;
   text: string;
+  topicTags: string[];
 }
 
 export function mergeTranscriptChunks(
@@ -55,24 +56,28 @@ export function transcriptStreamByThirtySeconds(
   bucketSeconds = DEFAULT_UI_REFRESH_SECONDS
 ): TranscriptStreamEntry[] {
   const bucketSizeMs = bucketSeconds * 1000;
-  const grouped = new Map<number, string[]>();
+  const grouped = new Map<number, { texts: string[]; tags: Set<string> }>();
   for (const chunk of chunks) {
     const text = chunk.text.trim();
     if (!text) {
       continue;
     }
     const bucket = Math.floor(chunk.start_ms / bucketSizeMs);
-    const list = grouped.get(bucket) ?? [];
-    list.push(text);
-    grouped.set(bucket, list);
+    const entry = grouped.get(bucket) ?? { texts: [], tags: new Set<string>() };
+    entry.texts.push(text);
+    for (const tag of chunk.topic_tags ?? []) {
+      entry.tags.add(tag);
+    }
+    grouped.set(bucket, entry);
   }
   return [...grouped.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([bucketIndex, texts]) => ({
+    .map(([bucketIndex, entry]) => ({
       id: `t_${bucketIndex}`,
       startMs: bucketIndex * bucketSizeMs,
       endMs: (bucketIndex + 1) * bucketSizeMs,
-      text: texts.join(" ").trim()
+      text: entry.texts.join(" ").trim(),
+      topicTags: [...entry.tags].slice(0, 4)
     }))
     .filter((item) => item.text.length > 0);
 }

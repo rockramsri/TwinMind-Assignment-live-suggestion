@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.embeddings import EmbeddingService
+from app.adapters.memory.embeddings import EmbeddingService
 from app.models import SessionState, TranscriptChunk
 from app.utils.time_utils import now_ms
 

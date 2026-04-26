@@ -33,13 +33,102 @@ backend/
   requirements.txt
   .env.example
   app/
+    main.py                # API boundary (FastAPI app + endpoints)
+    container.py           # composition root (wires services + adapters)
+    config.py              # pydantic-settings config
+    models.py              # session/transcript/card/ledger dataclasses
+    schemas.py             # request/response Pydantic schemas
+    export.py              # session JSON export
+    prompts.py             # live + detail + chat prompts and JSON schemas
+    domain/
+      sessions/            # session config + service ports
+      transcript/          # audio slicing, rolling window, STT (Groq Whisper)
+      suggestions/         # topic routing + 3-card generation pipeline
+      memory/              # context packer (live + card chat)
+      chat/                # card open + streaming follow-up
+    adapters/
+      memory/              # embeddings + FAISS index implementations
+      in_memory/           # session repository + persistence + session store
+      runtime.py           # adapters that bridge ports to feature engines
+    utils/                 # token budget, time utils, text normalize
   tests/
 frontend/
   package.json
   .env.local.example
-  app/
-  components/
-  lib/
+  app/                     # Next.js app router (page composition only)
+  components/              # UI presentation
+  hooks/                   # session lifecycle, recorder, refresh, card chat
+  lib/                     # api client, types, state helpers
+```
+
+## Architecture / Runtime Flow
+
+```mermaid
+flowchart TD
+  U[User speaks in browser]
+
+  U --> MIC[getUserMedia microphone]
+  MIC --> REC[MediaRecorder captures 5s audio slices]
+  REC --> UPLOAD[POST /api/session/:id/audio-slice]
+
+  UPLOAD --> STT[Groq whisper-large-v3 transcription]
+  STT --> CHUNK[Create TranscriptChunk]
+  CHUNK --> CHUNK_LIST[Store in SessionState.transcript_chunks]
+  CHUNK --> EMBED[Embed transcript text]
+  EMBED --> FAISS_CHUNK[FAISS transcript_chunk_index]
+
+  TIMER[Every 30s UI refresh] --> TICK[POST /api/session/:id/tick]
+  MANUAL[Manual refresh] --> TICK
+
+  TICK --> CADENCE{Server cadence allowed?}
+  CADENCE -- No --> HOLD[Return cadence_hold + latest cards]
+  CADENCE -- Yes --> WINDOW[Build rolling live window]
+
+  WINDOW --> ROUTE[Route topics]
+  ROUTE --> TOPIC_FAISS[Search FAISS topic_summary_index]
+  TOPIC_FAISS --> RANK[Rank/select relevant topics]
+
+  WINDOW --> CONTEXT[Build live context pack]
+  RANK --> CONTEXT
+  FAISS_CHUNK --> RETRIEVE[Retrieve older relevant transcript chunks]
+  RETRIEVE --> CONTEXT
+  LEDGER[SessionState.unresolved_ledger] --> CONTEXT
+  HISTORY[SessionState.suggestion_batches] --> CONTEXT
+
+  CONTEXT --> SUGGEST[Groq openai/gpt-oss-120b live suggestion prompt]
+  SUGGEST --> VALIDATE[Validate evidence IDs + dedupe previews + type diversity]
+  VALIDATE --> CARDS[Return exactly 3 suggestion cards]
+
+  CARDS --> CARD_STORE[Store SuggestionBatch in memory]
+  CARDS --> TOPIC_UPDATE[Update topic_clusters + topic_summary_index]
+  CARDS --> PREVIEW_FAISS[Update suggestion_preview_index]
+  CARDS --> UI_CARDS[Render cards in center panel]
+
+  CHUNK_LIST --> UI_TRANSCRIPT[Render live transcript left panel]
+  TOPIC_UPDATE --> TAGS[Attach topic tags to transcript chunks]
+  TAGS --> UI_TRANSCRIPT
+
+  UI_CARDS --> SELECT[User clicks suggestion card]
+  SELECT --> OPEN[POST /api/session/:id/card/:card_id/open]
+  OPEN --> CARD_CONTEXT[Build selected-card context]
+  CARD_CONTEXT --> DETAIL_PROMPT[Groq detailed card explanation]
+  DETAIL_PROMPT --> CITATIONS[Ensure transcript citations]
+  CITATIONS --> RIGHT_PANEL[Render explanation in right panel]
+
+  RIGHT_PANEL --> ASK[User asks follow-up]
+  ASK --> CHAT[POST /api/session/:id/card/:card_id/chat]
+  CHAT --> CHAT_CONTEXT[Build chat context from card + citations + thread history]
+  CHAT_CONTEXT --> CHAT_PROMPT[Groq streaming chat prompt]
+  CHAT_PROMPT --> CHAT_STREAM[Stream answer tokens]
+  CHAT_STREAM --> RIGHT_PANEL
+
+  SETTINGS[Settings modal] --> CONFIG[PATCH /api/session/:id/config]
+  CONFIG --> SESSION_CONFIG[SessionState.session_config]
+  SESSION_CONFIG --> WINDOW
+  SESSION_CONFIG --> CADENCE
+  SESSION_CONFIG --> CONTEXT
+  SESSION_CONFIG --> DETAIL_PROMPT
+  SESSION_CONFIG --> CHAT_PROMPT
 ```
 
 ## Backend setup
@@ -88,8 +177,10 @@ frontend/
 - `POST /api/session/start`
 - `POST /api/session/{session_id}/validate-key`
 - `POST /api/session/{session_id}/audio-slice`
-- `POST /api/session/{session_id}/tick`
+- `POST /api/session/{session_id}/tick` (supports `?force=true` for manual refresh)
 - `GET /api/session/{session_id}/state`
+- `GET /api/session/{session_id}/config`
+- `PATCH /api/session/{session_id}/config`
 - `POST /api/session/{session_id}/card/{card_id}/open`
 - `POST /api/session/{session_id}/card/{card_id}/chat` (streamed)
 - `GET /api/session/{session_id}/export`

@@ -32,10 +32,33 @@ Hard requirements:
   clients, users, or teams beyond the speaker.
 - Do not generate vague "project starter" advice; each card must reference a concrete
   spoken detail from the current window.
+- Do not repeat suggestions from recent_card_history.
+- If the current window says a prior suggestion was already asked, answered,
+  decided, confirmed, or thanked for, treat that intent as covered and avoid it.
+- If the transcript shows a human/process signal (physical discomfort, stress,
+  repeated apology, confusion, interruption, or meeting friction), one card may
+  suggest a brief meeting-process check-in. Keep it practical, non-medical,
+  non-therapeutic, and grounded in the transcript.
+- No scripted dialogue, no role-play lines, and no placeholders like [Name]/[Team]/[Company].
+- title must be a single concrete intent in plain language.
+- preview must state a specific next step or question grounded in transcript facts.
+- why_now must tie to an immediate signal from recent conversation.
+- evidence_chunk_ids must include only chunks that directly support the card.
 """.strip()
 
 
-CLICKED_CARD_SYSTEM_PROMPT = """
+CARD_DETAIL_SYSTEM_PROMPT = """
+You produce a grounded detailed explanation for one selected suggestion card.
+Rules:
+- Stay fully grounded to provided transcript/context only.
+- Give direct recommendations: what to do now, what to verify next, and why.
+- Do not include scripted dialogue or placeholder text.
+- Do not explain card mechanics.
+- Do not include chunk ids inline; citations are appended separately.
+""".strip()
+
+
+CARD_CHAT_SYSTEM_PROMPT = """
 You answer follow-up questions for one selected suggestion card.
 Rules:
 - Stay grounded to provided transcript/context only.
@@ -46,6 +69,8 @@ Rules:
 - Keep answers concise and practical with clear next actions.
 - If context is sparse, provide the best possible answer plus one short clarification question.
 - Do not include chunk ids inline in the narrative. Citations are appended separately.
+- Do not use scripted dialogue or template text unless the user explicitly asks for it.
+- Do not use placeholders like [Name], [Team], [Company].
 """.strip()
 
 
@@ -210,12 +235,14 @@ def topic_ranker_messages(
 
 def live_suggestion_messages(
     context_payload: dict[str, Any],
+    prompt_override: str | None = None,
 ) -> list[dict[str, str]]:
+    base_prompt = prompt_override.strip() if (prompt_override or "").strip() else LIVE_SUGGESTIONS_SYSTEM_PROMPT
     return [
         {
             "role": "system",
             "content": (
-                f"{LIVE_SUGGESTIONS_SYSTEM_PROMPT}\n"
+                f"{base_prompt}\n"
                 f"JSON schema: {json.dumps(LIVE_SUGGESTIONS_JSON_SCHEMA['schema'])}"
             ),
         },
@@ -223,13 +250,28 @@ def live_suggestion_messages(
     ]
 
 
+def card_detail_messages(
+    card_payload: dict[str, Any],
+    user_message: str,
+    prompt_override: str | None = None,
+) -> list[dict[str, str]]:
+    base_prompt = prompt_override.strip() if (prompt_override or "").strip() else CARD_DETAIL_SYSTEM_PROMPT
+    return [
+        {"role": "system", "content": base_prompt},
+        {"role": "system", "content": json.dumps(card_payload)},
+        {"role": "user", "content": user_message},
+    ]
+
+
 def card_chat_messages(
     card_payload: dict[str, Any],
     thread: list[dict[str, Any]],
     user_message: str | None = None,
+    prompt_override: str | None = None,
 ) -> list[dict[str, str]]:
+    base_prompt = prompt_override.strip() if (prompt_override or "").strip() else CARD_CHAT_SYSTEM_PROMPT
     messages: list[dict[str, str]] = [
-        {"role": "system", "content": CLICKED_CARD_SYSTEM_PROMPT},
+        {"role": "system", "content": base_prompt},
         {"role": "system", "content": json.dumps(card_payload)},
     ]
     messages.extend(thread)

@@ -1,0 +1,2 @@
+"""Volatile infrastructure adapters."""
+

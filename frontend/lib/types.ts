@@ -12,6 +12,7 @@ export interface TranscriptChunk {
   end_ms: number;
   created_at_ms: number;
   is_low_signal: boolean;
+  topic_tags: string[];
 }
 
 export interface SuggestionCard {
@@ -69,4 +70,15 @@ export interface SessionState {
   suggestion_batches: SuggestionBatch[];
   unresolved_ledger: Array<Record<string, unknown>>;
   active_topic_id?: string | null;
+  session_config: SessionConfig;
+}
+
+export interface SessionConfig {
+  live_window_seconds: number;
+  live_context_token_cap: number;
+  chat_context_token_cap: number;
+  tick_cadence_seconds: number;
+  live_suggestions_prompt?: string | null;
+  card_detail_prompt?: string | null;
+  card_chat_prompt?: string | null;
 }

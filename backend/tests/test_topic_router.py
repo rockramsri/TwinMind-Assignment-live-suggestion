@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from app.models import SessionState, TopicCluster, TranscriptChunk
-from app.topic_router import route_topics
+from app.adapters.memory.faiss_index import FaissMemoryIndex
+from app.domain.suggestions.topic_router import route_topics
 from app.utils.time_utils import now_ms
 
 
@@ -20,9 +21,9 @@ def _base_session() -> SessionState:
         session_id="s1",
         created_at_ms=now_ms(),
         faiss_indexes={
-            "transcript_chunk_index": type("Idx", (), {"add": lambda *_: None})(),
-            "topic_summary_index": type("Idx", (), {"add": lambda *_: None})(),
-            "suggestion_preview_index": type("Idx", (), {"add": lambda *_: None})(),
+            "transcript_chunk_index": FaissMemoryIndex(),
+            "topic_summary_index": FaissMemoryIndex(),
+            "suggestion_preview_index": FaissMemoryIndex(),
         },
     )
 
@@ -48,6 +49,8 @@ def test_single_topic_mode_when_recent_topic_score_high() -> None:
         chunk_ids=[],
         last_touched_ms=current - 600_000,
     )
+    session.faiss_indexes["topic_summary_index"].add("topic_budget", [1.0, 0.0])
+    session.faiss_indexes["topic_summary_index"].add("topic_hiring", [0.0, 1.0])
     session.active_topic_id = "topic_budget"
     chunks = [
         TranscriptChunk(
@@ -91,6 +94,8 @@ def test_fallback_mode_when_gap_is_too_small() -> None:
         chunk_ids=[],
         last_touched_ms=current,
     )
+    session.faiss_indexes["topic_summary_index"].add("topic_a", [0.65, 0.35])
+    session.faiss_indexes["topic_summary_index"].add("topic_b", [0.55, 0.45])
     session.active_topic_id = "topic_a"
     chunks = [
         TranscriptChunk(

@@ -7,12 +7,12 @@ from typing import Any
 
 from openai import OpenAI
 
+from app.adapters.memory.embeddings import EmbeddingService
 from app.config import get_settings
-from app.embeddings import EmbeddingService
+from app.domain.transcript.transcribe import resolve_groq_api_key
 from app.models import LedgerItem, SessionState, SuggestionBatch, SuggestionCard, TopicCluster
 from app.prompts import LIVE_SUGGESTIONS_JSON_SCHEMA, live_suggestion_messages
-from app.transcribe import resolve_groq_api_key
-from app.utils.text_normalize import normalize_preview, preview_hash
+from app.utils.text_normalize import keyword_set, normalize_preview, preview_hash
 from app.utils.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def is_duplicate_preview(
     preview_text: str,
     session: SessionState,
     embedding_service: EmbeddingService,
-    threshold: float = 0.92,
+    threshold: float = 0.86,
 ) -> bool:
     normalized = normalize_preview(preview_text)
     if not normalized:
@@ -83,10 +83,64 @@ def is_duplicate_preview(
     return False
 
 
+def _is_already_covered_by_window(
+    *,
+    card: dict[str, Any],
+    context_payload: dict[str, Any],
+) -> bool:
+    window_text = " ".join(
+        str(item.get("text", ""))
+        for item in context_payload.get("current_window_chunks", [])
+    ).lower()
+    if not window_text.strip():
+        return False
+
+    intent_text = f"{card.get('title', '')} {card.get('preview', '')}".strip()
+    intent_tokens = keyword_set(intent_text)
+    window_tokens = keyword_set(window_text)
+    if not intent_tokens or not window_tokens:
+        return False
+
+    overlap = len(intent_tokens.intersection(window_tokens)) / max(1, len(intent_tokens))
+    recent_card_history = context_payload.get("recent_card_history", [])
+    most_similar_recent = 0.0
+    for recent_card in recent_card_history:
+        recent_tokens = keyword_set(
+            f"{recent_card.get('title', '')} {recent_card.get('preview', '')}"
+        )
+        if not recent_tokens:
+            continue
+        shared = len(intent_tokens.intersection(recent_tokens))
+        most_similar_recent = max(
+            most_similar_recent,
+            shared / max(1, min(len(intent_tokens), len(recent_tokens))),
+        )
+
+    completion_signals = [
+        "already asked",
+        "already answered",
+        "we asked",
+        "i asked",
+        "we covered",
+        "that's covered",
+        "that is covered",
+        "resolved",
+        "decided",
+        "confirmed",
+        "thank you",
+        "thanks",
+    ]
+    has_completion_signal = any(signal in window_text for signal in completion_signals)
+    return most_similar_recent >= 0.7 or (
+        most_similar_recent >= 0.45 and overlap >= 0.35 and has_completion_signal
+    )
+
+
 def _request_live_suggestions(
     *,
     api_key: str,
     context_payload: dict[str, Any],
+    prompt_override: str | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     client = OpenAI(api_key=api_key, base_url=settings.GROQ_BASE_URL)
@@ -97,7 +151,7 @@ def _request_live_suggestions(
             "type": "json_schema",
             "json_schema": LIVE_SUGGESTIONS_JSON_SCHEMA,
         },
-        messages=live_suggestion_messages(context_payload),
+        messages=live_suggestion_messages(context_payload, prompt_override=prompt_override),
     )
     raw = completion.choices[0].message.content or "{}"
     return json.loads(raw)
@@ -138,17 +192,21 @@ def _fallback_cards(
 
 def _materialize_cards(
     *,
+    session: SessionState,
     payload_cards: list[dict[str, Any]],
     window_chunk_ids: list[str],
 ) -> list[SuggestionCard]:
     cards: list[SuggestionCard] = []
     ts = now_ms()
+    valid_chunk_ids = {chunk.chunk_id for chunk in session.transcript_chunks}
     for raw in payload_cards:
         evidence = raw.get("evidence_chunk_ids") or window_chunk_ids[:2]
-        evidence = [str(item) for item in evidence if str(item).strip()]
+        evidence = [str(item) for item in evidence if str(item).strip() and str(item) in valid_chunk_ids]
+        if not evidence:
+            evidence = window_chunk_ids[:2]
         topic_ids = raw.get("topic_ids") or ["topic_current"]
         card = SuggestionCard(
-            card_id=raw.get("card_id") or f"card_{uuid.uuid4().hex[:8]}",
+            card_id=f"card_{uuid.uuid4().hex[:8]}",
             type=raw.get("type", "question_to_ask"),
             title=(raw.get("title", "") or "Untitled card")[:80],
             preview=(raw.get("preview", "") or "No preview")[:180],
@@ -268,13 +326,16 @@ def generate_suggestion_batch(
     api_key = resolve_groq_api_key(session.user_groq_api_key_in_memory)
     cards_payload: dict[str, Any] | None = None
 
+    accepted_payload: dict[str, Any] | None = None
     for attempt in range(3):
+        valid_chunk_ids = {chunk.chunk_id for chunk in session.transcript_chunks}
         try:
             if not api_key:
                 raise ValueError("Missing Groq API key for suggestion generation")
             cards_payload = _request_live_suggestions(
                 api_key=api_key,
                 context_payload=context_payload,
+                prompt_override=session.session_config.get("live_suggestions_prompt"),
             )
         except Exception as exc:  # pragma: no cover - network/host dependent
             logger.warning("Live suggestions request failed, using fallback: %s", exc)
@@ -292,26 +353,38 @@ def generate_suggestion_batch(
             continue
         duplicate_found = False
         for card in candidate_cards:
+            evidence_ids = [str(item) for item in card.get("evidence_chunk_ids", [])]
+            if not any(item in valid_chunk_ids for item in evidence_ids):
+                duplicate_found = True
+                break
             if is_duplicate_preview(
-                preview_text=card.get("preview", ""),
+                preview_text=f"{card.get('title', '')}. {card.get('preview', '')}",
                 session=session,
                 embedding_service=embedding_service,
             ):
                 duplicate_found = True
                 break
+            if _is_already_covered_by_window(card=card, context_payload=context_payload):
+                duplicate_found = True
+                break
         if duplicate_found:
             continue
+        accepted_payload = cards_payload
         break
 
-    if cards_payload is None:
+    if accepted_payload is None:
         cards_payload = _fallback_cards(context_payload=context_payload, now=now_ms())
+    else:
+        cards_payload = accepted_payload
 
     cards = _materialize_cards(
+        session=session,
         payload_cards=cards_payload.get("cards", [])[:3],
         window_chunk_ids=window_chunk_ids,
     )
     if len(cards) < 3:
         fallback = _materialize_cards(
+            session=session,
             payload_cards=_fallback_cards(context_payload=context_payload, now=now_ms())["cards"],
             window_chunk_ids=window_chunk_ids,
         )

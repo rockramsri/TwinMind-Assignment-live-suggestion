@@ -1,0 +1,2 @@
+"""Feature-first domain package."""
+

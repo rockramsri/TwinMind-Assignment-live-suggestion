@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from app.faiss_index import FaissMemoryIndex
+from app.adapters.memory.faiss_index import FaissMemoryIndex
 from app.models import SessionState, SuggestionBatch, SuggestionCard
-from app.suggestion_engine import is_duplicate_preview
+from app.domain.suggestions.engine import is_duplicate_preview
 from app.utils.text_normalize import preview_hash
 from app.utils.time_utils import now_ms
 

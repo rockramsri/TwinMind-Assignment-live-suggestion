@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.export import build_session_export
-from app.faiss_index import FaissMemoryIndex
+from app.adapters.memory.faiss_index import FaissMemoryIndex
 from app.models import (
     ChatMessage,
     LedgerItem,
@@ -87,3 +87,4 @@ def test_export_contains_expected_top_level_sections() -> None:
     assert exported["suggestion_batches"][0]["cards"][0]["card_id"] == "card_1"
     assert exported["unresolved_ledger"][0]["ledger_item_id"] == "ledger_1"
     assert exported["card_chat_threads"]["card_1"][0]["role"] == "assistant"
+    assert "session_config" in exported

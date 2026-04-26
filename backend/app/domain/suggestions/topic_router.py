@@ -6,11 +6,11 @@ from typing import Any
 
 from openai import OpenAI
 
+from app.adapters.memory.embeddings import EmbeddingService, cosine_similarity
 from app.config import get_settings
-from app.embeddings import EmbeddingService, cosine_similarity
+from app.domain.transcript.transcribe import resolve_groq_api_key
 from app.models import SessionState, TopicCluster
 from app.prompts import TOPIC_RANKER_JSON_SCHEMA, topic_ranker_messages
-from app.transcribe import resolve_groq_api_key
 from app.utils.text_normalize import keyword_set
 from app.utils.time_utils import now_ms
 
@@ -108,8 +108,22 @@ def route_topics(
         }
 
     current_ms = now_ms()
+    prefilter_ids = [
+        topic_id
+        for topic_id, _ in session.faiss_indexes["topic_summary_index"].search(
+            window_embedding,
+            top_k=max(10, settings.TOPIC_CANDIDATE_PREFILTER),
+        )
+    ]
+    if session.active_topic_id and session.active_topic_id not in prefilter_ids:
+        prefilter_ids.append(session.active_topic_id)
+    candidate_topics = (
+        [session.topic_clusters[topic_id] for topic_id in prefilter_ids if topic_id in session.topic_clusters]
+        if prefilter_ids
+        else list(session.topic_clusters.values())
+    )
     scored_topics: list[dict[str, Any]] = []
-    for cluster in session.topic_clusters.values():
+    for cluster in candidate_topics:
         score = compute_recent_topic_score(
             window_embedding=window_embedding,
             cluster=cluster,
@@ -218,5 +232,5 @@ def route_topics(
         "recent_topic_score": round(active_score, 4),
         "gap_to_next": round(gap_to_next, 4),
         "selected_topics": filtered,
-        "candidates_considered": len(candidates),
+        "candidates_considered": len(candidate_topics),
     }

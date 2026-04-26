@@ -29,6 +29,27 @@ class TranscriptChunkOut(BaseModel):
     end_ms: int
     created_at_ms: int
     is_low_signal: bool
+    topic_tags: list[str] = Field(default_factory=list)
+
+
+class SessionConfigOut(BaseModel):
+    live_window_seconds: int
+    live_context_token_cap: int
+    chat_context_token_cap: int
+    tick_cadence_seconds: int
+    live_suggestions_prompt: str | None = None
+    card_detail_prompt: str | None = None
+    card_chat_prompt: str | None = None
+
+
+class SessionConfigUpdateRequest(BaseModel):
+    live_window_seconds: int | None = Field(default=None, ge=10, le=120)
+    live_context_token_cap: int | None = Field(default=None, ge=500, le=6000)
+    chat_context_token_cap: int | None = Field(default=None, ge=1000, le=12000)
+    tick_cadence_seconds: int | None = Field(default=None, ge=10, le=120)
+    live_suggestions_prompt: str | None = Field(default=None, max_length=12000)
+    card_detail_prompt: str | None = Field(default=None, max_length=12000)
+    card_chat_prompt: str | None = Field(default=None, max_length=12000)
 
 
 class SuggestionCardOut(BaseModel):
@@ -64,6 +85,7 @@ class SessionStateResponse(BaseModel):
     suggestion_batches: list[dict[str, Any]]
     unresolved_ledger: list[dict[str, Any]]
     active_topic_id: str | None
+    session_config: SessionConfigOut
 
 
 class CardOpenResponse(BaseModel):

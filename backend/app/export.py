@@ -17,6 +17,7 @@ def build_session_export(session: SessionState) -> dict[str, Any]:
                 "end_ms": chunk.end_ms,
                 "created_at_ms": chunk.created_at_ms,
                 "is_low_signal": chunk.is_low_signal,
+                "topic_tags": chunk.topic_tags,
             }
             for chunk in session.transcript_chunks
         ],
@@ -79,4 +80,5 @@ def build_session_export(session: SessionState) -> dict[str, Any]:
             ]
             for card_id, messages in session.card_chat_threads.items()
         },
+        "session_config": session.session_config,
     }

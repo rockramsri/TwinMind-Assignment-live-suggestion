@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     TOPIC_CANDIDATE_PREFILTER: int = 12
     TOPIC_RANKER_TOP_K: int = 5
     RETRIEVE_CHUNKS_PER_TOPIC: int = 2
+    ENABLE_OPTIONAL_PERSISTENCE: bool = False
+    OPTIONAL_PERSISTENCE_DIR: str = ".tm_optional_persistence"
     LOG_LEVEL: str = "INFO"
 
     model_config = SettingsConfigDict(

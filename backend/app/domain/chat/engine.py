@@ -7,10 +7,10 @@ from typing import Any
 from openai import OpenAI
 
 from app.config import get_settings
-from app.context_packer import build_card_chat_payload
+from app.domain.memory.context_packer import build_card_chat_payload
+from app.domain.transcript.transcribe import resolve_groq_api_key
 from app.models import ChatMessage, SessionState, SuggestionCard
-from app.prompts import card_chat_messages
-from app.transcribe import resolve_groq_api_key
+from app.prompts import card_chat_messages, card_detail_messages
 from app.utils.time_utils import format_citation_range, now_ms
 from app.utils.token_budget import estimate_tokens
 
@@ -38,16 +38,52 @@ def _build_citations(session: SessionState, chunk_ids: list[str]) -> list[dict[s
                 "start_ms": chunk.start_ms,
                 "end_ms": chunk.end_ms,
                 "label": format_citation_range(chunk.start_ms, chunk.end_ms),
+                "topic_tags": chunk.topic_tags,
             }
         )
     return citations
 
 
-def _citation_footer(citations: list[dict[str, Any]]) -> str:
-    if not citations:
-        return "\n\nSources: none available in current transcript window."
-    parts = [f"{item['chunk_id']} {item['label']}" for item in citations]
-    return "\n\nSources: " + ", ".join(parts)
+def _ensure_resolvable_citations(
+    session: SessionState,
+    citations: list[dict[str, Any]],
+    minimum: int = 1,
+) -> list[dict[str, Any]]:
+    if len(citations) >= minimum:
+        return citations
+    fallback_chunks = [chunk for chunk in reversed(session.transcript_chunks) if not chunk.is_low_signal][:2]
+    repaired = list(citations)
+    for chunk in fallback_chunks:
+        repaired.append(
+            {
+                "chunk_id": chunk.chunk_id,
+                "start_ms": chunk.start_ms,
+                "end_ms": chunk.end_ms,
+                "label": format_citation_range(chunk.start_ms, chunk.end_ms),
+                "topic_tags": chunk.topic_tags,
+            }
+        )
+    deduped: dict[str, dict[str, Any]] = {item["chunk_id"]: item for item in repaired}
+    return list(deduped.values())
+
+
+def _format_topic_label(topic_id: str) -> str:
+    return topic_id.replace("_", " ").replace("-", " ").strip().title()
+
+
+def _citation_footer(
+    citations: list[dict[str, Any]],
+    *,
+    topic_ids: list[str],
+) -> str:
+    topic_labels = [_format_topic_label(topic_id) for topic_id in topic_ids if topic_id.strip()]
+    if topic_labels:
+        unique_labels = list(dict.fromkeys(topic_labels))
+        return "\n\nSources: " + ", ".join(unique_labels)
+    if citations:
+        ranges = [str(item["label"]) for item in citations[:3]]
+        return "\n\nSources: transcript segments " + ", ".join(ranges)
+    return "\n\nSources: none available in current transcript window."
 
 
 def _summarize_thread_if_needed(
@@ -84,7 +120,7 @@ def open_card_explanation(
     if card is None:
         raise ValueError("Card not found")
 
-    citations = _build_citations(session, card.evidence_chunk_ids)
+    citations = _ensure_resolvable_citations(session, _build_citations(session, card.evidence_chunk_ids))
     thread = session.card_chat_threads.setdefault(card_id, [])
     if thread:
         return thread[0].text, citations, _thread_to_dict(thread)
@@ -103,25 +139,24 @@ def open_card_explanation(
             completion = client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 temperature=0.4,
-                messages=card_chat_messages(payload, [], prompt_message),
+                messages=card_detail_messages(
+                    payload,
+                    prompt_message,
+                    prompt_override=session.session_config.get("card_detail_prompt"),
+                ),
             )
             answer = (completion.choices[0].message.content or "").strip()
         except Exception as exc:  # pragma: no cover - network/host dependent
             logger.warning("Card open explanation generation failed: %s", exc)
 
     if not answer:
-        evidence_summary = "; ".join(
-            [
-                f"{item['chunk_id']} {item['label']}"
-                for item in citations[:3]
-            ]
-        )
+        evidence_summary = ", ".join(_format_topic_label(topic_id) for topic_id in card.topic_ids[:3])
         answer = (
             f"{card.title}: {card.preview}. "
             f"Why now: {card.why_now}. "
-            f"Grounding: {evidence_summary or 'insufficient transcript evidence'}."
+            f"Grounding: {evidence_summary or 'recent transcript context'}."
         )
-    answer = answer + _citation_footer(citations)
+    answer = answer + _citation_footer(citations, topic_ids=card.topic_ids)
 
     assistant_msg = ChatMessage(
         role="assistant",
@@ -154,7 +189,7 @@ def stream_card_chat_answer(
         card=card,
         latest_user_message=user_message,
     )
-    citations = _build_citations(session, card.evidence_chunk_ids)
+    citations = _ensure_resolvable_citations(session, _build_citations(session, card.evidence_chunk_ids))
     prior_thread = compact_thread
     if (
         prior_thread
@@ -173,7 +208,12 @@ def stream_card_chat_answer(
                 model=settings.LLM_MODEL,
                 temperature=0.35,
                 stream=True,
-                messages=card_chat_messages(payload, history, user_message),
+                messages=card_chat_messages(
+                    payload,
+                    history,
+                    user_message,
+                    prompt_override=session.session_config.get("card_chat_prompt"),
+                ),
             )
             for chunk in stream:
                 delta = chunk.choices[0].delta.content or ""
@@ -192,7 +232,7 @@ def stream_card_chat_answer(
         streamed_parts.append(fallback)
         yield fallback
 
-    footer = _citation_footer(citations)
+    footer = _citation_footer(citations, topic_ids=card.topic_ids)
     streamed_parts.append(footer)
     yield footer
 

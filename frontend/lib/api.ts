@@ -1,4 +1,10 @@
-import { CardOpenResponse, SessionState, TickResponse, TranscriptChunk } from "./types";
+import {
+  CardOpenResponse,
+  SessionConfig,
+  SessionState,
+  TickResponse,
+  TranscriptChunk
+} from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -57,9 +63,22 @@ export async function uploadAudioSlice(
   return parseJsonOrThrow(response);
 }
 
-export async function tickSession(sessionId: string): Promise<TickResponse> {
-  const response = await fetch(`${API_BASE}/api/session/${sessionId}/tick`, {
+export async function tickSession(sessionId: string, force = false): Promise<TickResponse> {
+  const suffix = force ? "?force=true" : "";
+  const response = await fetch(`${API_BASE}/api/session/${sessionId}/tick${suffix}`, {
     method: "POST"
+  });
+  return parseJsonOrThrow(response);
+}
+
+export async function updateSessionConfig(
+  sessionId: string,
+  payload: Partial<SessionConfig>
+): Promise<SessionConfig> {
+  const response = await fetch(`${API_BASE}/api/session/${sessionId}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
   return parseJsonOrThrow(response);
 }

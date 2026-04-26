@@ -7,6 +7,7 @@ interface SuggestionsPanelProps {
   currentCards: SuggestionCardType[];
   olderCards: SuggestionCardType[];
   selectedCardId?: string | null;
+  coveredCardIds?: Set<string>;
   onSelectCard: (card: SuggestionCardType) => void;
 }
 
@@ -14,6 +15,7 @@ export default function SuggestionsPanel({
   currentCards,
   olderCards,
   selectedCardId,
+  coveredCardIds = new Set<string>(),
   onSelectCard
 }: SuggestionsPanelProps) {
   return (
@@ -41,6 +43,7 @@ export default function SuggestionsPanel({
                     key={card.card_id}
                     card={card}
                     selected={selectedCardId === card.card_id}
+                    covered={coveredCardIds.has(card.card_id)}
                     onClick={() => onSelectCard(card)}
                   />
                 ))}
@@ -57,6 +60,7 @@ export default function SuggestionsPanel({
                       key={card.card_id}
                       card={card}
                       selected={selectedCardId === card.card_id}
+                      covered={coveredCardIds.has(card.card_id)}
                       onClick={() => onSelectCard(card)}
                     />
                   ))}

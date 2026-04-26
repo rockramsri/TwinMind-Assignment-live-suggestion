@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.adapters.memory.embeddings import cosine_similarity
 from app.config import get_settings
 from app.models import SessionState, SuggestionCard, TranscriptChunk
 from app.utils.text_normalize import keyword_set
 from app.utils.token_budget import clamp_text_to_token_cap
+
+
+def _cfg_int(session: SessionState, key: str, fallback: int) -> int:
+    value = session.session_config.get(key, fallback)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _window_entries(window_chunks: list[TranscriptChunk]) -> list[dict[str, Any]]:
@@ -19,6 +28,7 @@ def _window_entries(window_chunks: list[TranscriptChunk]) -> list[dict[str, Any]
                 "text": chunk.text,
                 "start_ms": chunk.start_ms,
                 "end_ms": chunk.end_ms,
+                "topic_tags": chunk.topic_tags,
             }
         )
     return entries
@@ -49,33 +59,56 @@ def _retrieved_topic_chunks(
     session: SessionState,
     *,
     selected_topic_ids: list[str],
+    window_chunks: list[TranscriptChunk],
+    window_embedding: list[float],
 ) -> list[dict[str, Any]]:
     settings = get_settings()
     chunks_by_id = {chunk.chunk_id: chunk for chunk in session.transcript_chunks}
-    seen_chunk_ids: set[str] = set()
+    ledger_topic_ids = {
+        item.topic_id for item in session.unresolved_ledger.values() if item.status == "open"
+    }
+    window_chunk_ids = {chunk.chunk_id for chunk in window_chunks}
+    search_k = max(12, len(selected_topic_ids) * 6)
+    semantic_hits = session.faiss_indexes["transcript_chunk_index"].search(window_embedding, top_k=search_k)
+    scored: list[tuple[float, TranscriptChunk]] = []
     retrieved: list[dict[str, Any]] = []
 
-    for topic_id in selected_topic_ids:
-        cluster = session.topic_clusters.get(topic_id)
-        if not cluster:
+    now_end_ms = max((chunk.end_ms for chunk in session.transcript_chunks), default=0)
+    for chunk_id, semantic_score in semantic_hits:
+        if chunk_id in window_chunk_ids:
             continue
-        selected_ids = cluster.chunk_ids[-settings.RETRIEVE_CHUNKS_PER_TOPIC :]
-        for chunk_id in selected_ids:
-            if chunk_id in seen_chunk_ids:
-                continue
-            chunk = chunks_by_id.get(chunk_id)
-            if chunk is None:
-                continue
-            seen_chunk_ids.add(chunk_id)
-            retrieved.append(
-                {
-                    "topic_id": topic_id,
-                    "chunk_id": chunk.chunk_id,
-                    "text": chunk.text,
-                    "start_ms": chunk.start_ms,
-                    "end_ms": chunk.end_ms,
-                }
-            )
+        chunk = chunks_by_id.get(chunk_id)
+        if not chunk:
+            continue
+        topic_boost = 0.0
+        for topic_id in selected_topic_ids:
+            cluster = session.topic_clusters.get(topic_id)
+            if cluster and chunk_id in cluster.chunk_ids:
+                topic_boost += 0.12
+            if topic_id in ledger_topic_ids:
+                topic_boost += 0.08
+        # Linear recency decay with long tail so old-but-relevant chunks can survive.
+        age_ms = max(0, now_end_ms - chunk.end_ms)
+        recency = max(0.15, 1.0 - (age_ms / (40 * 60 * 1000)))
+        blended = (0.75 * float(semantic_score)) + topic_boost + (0.15 * recency)
+        scored.append((blended, chunk))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    per_topic_cap = _cfg_int(session, "retrieve_chunks_per_topic", settings.RETRIEVE_CHUNKS_PER_TOPIC)
+    cap = max(4, max(1, len(selected_topic_ids)) * per_topic_cap)
+    for _, chunk in scored[:cap]:
+        retrieved.append(
+            {
+                "chunk_id": chunk.chunk_id,
+                "text": chunk.text,
+                "start_ms": chunk.start_ms,
+                "end_ms": chunk.end_ms,
+                "topic_tags": chunk.topic_tags,
+                "semantic_score": round(
+                    cosine_similarity(window_embedding, chunk.embedding) if chunk.embedding else 0.0, 4
+                ),
+            }
+        )
     return retrieved
 
 
@@ -158,6 +191,7 @@ def build_live_prompt_payload(
     route_decision: dict[str, Any],
 ) -> dict[str, Any]:
     settings = get_settings()
+    live_cap = _cfg_int(session, "live_context_token_cap", settings.LIVE_CONTEXT_TOKEN_CAP)
     selected_topic_ids = [
         str(item.get("topic_id"))
         for item in route_decision.get("selected_topics", [])
@@ -165,6 +199,16 @@ def build_live_prompt_payload(
     ]
     entries = _window_entries(window_chunks)
     window_text = "\n".join(entry["text"] for entry in entries)
+    window_embedding = []
+    if window_text.strip():
+        non_low_signal = [chunk.embedding for chunk in window_chunks if chunk.embedding]
+        if non_low_signal:
+            dim = len(non_low_signal[0])
+            totals = [0.0] * dim
+            for vec in non_low_signal:
+                for idx, value in enumerate(vec):
+                    totals[idx] += value
+            window_embedding = [value / len(non_low_signal) for value in totals]
     payload = {
         "window_start_ms": window_start_ms,
         "window_end_ms": window_end_ms,
@@ -174,6 +218,8 @@ def build_live_prompt_payload(
         "retrieved_topic_chunks": _retrieved_topic_chunks(
             session,
             selected_topic_ids=selected_topic_ids,
+            window_chunks=window_chunks,
+            window_embedding=window_embedding,
         ),
         "unresolved_ledger_context": _ledger_context(
             session,
@@ -187,7 +233,7 @@ def build_live_prompt_payload(
             "dedupe_against_recent": True,
         },
     }
-    return _trim_payload_for_cap(payload, settings.LIVE_CONTEXT_TOKEN_CAP)
+    return _trim_payload_for_cap(payload, live_cap)
 
 
 def build_card_chat_payload(
@@ -197,6 +243,7 @@ def build_card_chat_payload(
     latest_user_message: str | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
+    chat_cap = _cfg_int(session, "chat_context_token_cap", settings.CHAT_CONTEXT_TOKEN_CAP)
     chunks_by_id = {chunk.chunk_id: chunk for chunk in session.transcript_chunks}
     evidence_chunks = [
         {
@@ -204,6 +251,7 @@ def build_card_chat_payload(
             "text": chunks_by_id[chunk_id].text,
             "start_ms": chunks_by_id[chunk_id].start_ms,
             "end_ms": chunks_by_id[chunk_id].end_ms,
+            "topic_tags": chunks_by_id[chunk_id].topic_tags,
         }
         for chunk_id in card.evidence_chunk_ids
         if chunk_id in chunks_by_id
@@ -224,4 +272,4 @@ def build_card_chat_payload(
         "related_topics": related_topics,
         "latest_user_message": latest_user_message,
     }
-    return _trim_payload_for_cap(payload, settings.CHAT_CONTEXT_TOKEN_CAP)
+    return _trim_payload_for_cap(payload, chat_cap)

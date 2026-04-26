@@ -33,6 +33,7 @@ class TranscriptChunk:
     created_at_ms: int
     embedding: list[float] = field(default_factory=list)
     is_low_signal: bool = False
+    topic_tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -104,3 +105,5 @@ class SessionState:
     faiss_indexes: dict[str, Any] = field(default_factory=dict)
     active_topic_id: str | None = None
     last_tick_window_end_ms: int = 0
+    last_tick_emitted_ms: int = 0
+    session_config: dict[str, Any] = field(default_factory=dict)
