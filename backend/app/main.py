@@ -268,6 +268,8 @@ def tick_session(
         cards=[_card_out(card) for card in tick_result.cards],
         route_decision=tick_result.route_decision,
         ledger_updates=tick_result.ledger_updates,
+        window_start_ms=window_start_ms,
+        window_end_ms=window_end_ms,
     )
 
 

@@ -41,6 +41,8 @@ export interface TickResponse {
   cards: SuggestionCard[];
   route_decision: Record<string, unknown>;
   ledger_updates: Array<Record<string, unknown>>;
+  window_start_ms?: number;
+  window_end_ms?: number;
 }
 
 export interface CardThreadMessage {

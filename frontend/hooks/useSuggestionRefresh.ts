@@ -59,11 +59,17 @@ export function useSuggestionRefresh({
       return;
     }
     setCadenceHoldSecondsRemaining(null);
+    const tickWindowStart = Number(
+      tick.window_start_ms ?? (tick.route_decision.window_start_ms as number) ?? 0
+    );
+    const tickWindowEnd = Number(
+      tick.window_end_ms ?? (tick.route_decision.window_end_ms as number) ?? 0
+    );
     const newBatch: SuggestionBatch = {
       batch_id: `batch_${Date.now()}`,
       created_at_ms: Date.now(),
-      window_start_ms: Number((tick.route_decision.window_start_ms as number) ?? 0),
-      window_end_ms: Number((tick.route_decision.window_end_ms as number) ?? 0),
+      window_start_ms: tickWindowStart,
+      window_end_ms: tickWindowEnd,
       cards: tick.cards,
       route_decision: tick.route_decision
     };

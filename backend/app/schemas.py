@@ -75,6 +75,8 @@ class TickResponse(BaseModel):
     cards: list[SuggestionCardOut]
     route_decision: dict[str, Any]
     ledger_updates: list[dict[str, Any]]
+    window_start_ms: int = 0
+    window_end_ms: int = 0
 
 
 class SessionStateResponse(BaseModel):
