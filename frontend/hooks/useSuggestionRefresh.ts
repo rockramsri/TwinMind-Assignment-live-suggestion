@@ -73,9 +73,6 @@ export function useSuggestionRefresh({
       cards: tick.cards,
       route_decision: tick.route_decision
     };
-    // #region agent log
-    fetch('http://127.0.0.1:7922/ingest/498196cb-7196-411f-ac04-180a71faaf8a',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d15a93'},body:JSON.stringify({sessionId:'d15a93',hypothesisId:'H1',location:'useSuggestionRefresh.ts:applyTickResponse',message:'live tick batch built',data:{mode,batchWindowStart:newBatch.window_start_ms,batchWindowEnd:newBatch.window_end_ms,routeKeys:Object.keys(tick.route_decision || {}),cardCount:newBatch.cards.length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     setSuggestionBatches((current) => [newBatch, ...current]);
     if (mode === "empty_window") {
       setErrorMessage("Current window is mostly silent; cards may rely on unresolved context.");
