@@ -36,21 +36,29 @@ export function useSuggestionRefresh({
   const [countdown, setCountdown] = useState(DEFAULT_UI_REFRESH_SECONDS);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshMs, setLastRefreshMs] = useState<number | null>(null);
+  const [lastTickMode, setLastTickMode] = useState<string | null>(null);
+  const [cadenceHoldSecondsRemaining, setCadenceHoldSecondsRemaining] =
+    useState<number | null>(null);
   const tickInFlightRef = useRef(false);
   const pendingTickRef = useRef<PendingTickRequest | null>(null);
 
   function applyTickResponse(tick: Awaited<ReturnType<typeof tickSession>>) {
     setTranscriptChunks((current) => mergeTranscriptChunks(current, tick.transcript_append));
-    if (tick.route_decision.mode === "cadence_hold") {
+    const mode = (tick.route_decision.mode as string) ?? null;
+    setLastTickMode(mode);
+    if (mode === "cadence_hold") {
       const secondsUntilNext = Number(
         (tick.route_decision.seconds_until_next as number) ?? DEFAULT_UI_REFRESH_SECONDS
       );
+      const clamped = Math.max(1, Math.ceil(secondsUntilNext));
+      setCadenceHoldSecondsRemaining(clamped);
       // Align UI countdown with server cadence so the timer reflects
       // when a real generation will happen next.
-      setCountdown(Math.max(1, Math.min(DEFAULT_UI_REFRESH_SECONDS, Math.ceil(secondsUntilNext))));
+      setCountdown(Math.min(DEFAULT_UI_REFRESH_SECONDS, clamped));
       setErrorMessage(null);
       return;
     }
+    setCadenceHoldSecondsRemaining(null);
     const newBatch: SuggestionBatch = {
       batch_id: `batch_${Date.now()}`,
       created_at_ms: Date.now(),
@@ -60,7 +68,7 @@ export function useSuggestionRefresh({
       route_decision: tick.route_decision
     };
     setSuggestionBatches((current) => [newBatch, ...current]);
-    if (tick.route_decision.mode === "empty_window") {
+    if (mode === "empty_window") {
       setErrorMessage("Current window is mostly silent; cards may rely on unresolved context.");
     } else {
       setErrorMessage(null);
@@ -126,6 +134,8 @@ export function useSuggestionRefresh({
     setCountdown,
     isRefreshing,
     lastRefreshMs,
-    runTick
+    runTick,
+    lastTickMode,
+    cadenceHoldSecondsRemaining
   };
 }

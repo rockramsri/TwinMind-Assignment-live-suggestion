@@ -26,6 +26,58 @@ Live meeting copilot monorepo with:
 - Every explanation/chat answer includes transcript citations (`chunk_id` + `[HH:MM:SS–HH:MM:SS]`).
 - Session can be exported as JSON from in-memory state.
 
+## Approach overview
+
+This is a thin, in-memory copilot. The mental model is: capture audio, transcribe fast, choose what we are talking about, retrieve only what is relevant, generate exactly 3 grounded cards, and let the user dig into any card with citations.
+
+### Pipeline at a glance
+
+1. Capture: browser records 5s audio slices and posts them to the backend.
+2. Transcribe: Groq `whisper-large-v3` returns text per slice; chunk is added to `SessionState.transcript_chunks` and embedded into the FAISS `transcript_chunk_index`.
+3. Tick (every ~30s or manual refresh):
+   - Build a rolling 25s window from the most recent chunks.
+   - Route topics: pick the active topic with high confidence, otherwise fall back to a top-k ranker.
+   - Pack context: window + topic summaries + retrieved older chunks + open ledger items + recent card history.
+   - Generate cards: ask `openai/gpt-oss-120b` for exactly 3 cards via JSON schema.
+   - Validate: enforce evidence chunk IDs, type diversity, dedup, and not-already-covered.
+4. Open card: build a card-scoped context, ask the model for a grounded detailed answer with citations.
+5. Card chat: a per-card thread, streamed token-by-token, still grounded to transcript citations.
+
+### Topic routing logic
+
+Two modes pick which topics to feed the model:
+
+- Recent-topic mode: if the active topic still scores high (centroid + summary similarity + keyword overlap + recency) and clearly beats the runner-up, we keep using it. This avoids whiplash on every tick.
+- Fallback ranker mode: when the active topic is no longer dominant, we ANN-prefilter top topics from the FAISS topic summary index and ask the model to rank the top 5 by relevance. Selected topics drive context retrieval and card grounding.
+
+### Retrieval and context packing
+
+- Current 25s window chunks are mandatory context.
+- For each selected topic we pull a small number of older relevant transcript chunks from the FAISS chunk index, blended with topic-overlap and recency boosts.
+- We add open ledger items (questions/decisions to revisit) and recent card history so the model knows what was already raised.
+- Token budget is split (≈ window 55%, topic 25%, ledger 15%, history 5%); each section is trimmed before the call.
+
+### Card validation and "covered" detection
+
+- Each card must reference real `evidence_chunk_ids` that exist in transcript memory; otherwise it is rejected.
+- We dedup card previews using a hash + FAISS embedding similarity against recent batches.
+- A backend rule rejects candidates that look like stale repeats of recent cards or whose intent appears already resolved in the current window.
+- The frontend marks a card as "covered" only when the user used it (chat sent) or when transcript AFTER that card's window addresses it (overlap with completion phrasing).
+
+### Cadence and refresh
+
+- Server enforces a configurable tick cadence (default 30s). Manual "Refresh now" forces a generation.
+- If a tick is requested before the cadence elapses, the server returns `cadence_hold` and the UI countdown re-syncs to the server's `seconds_until_next` plus shows a small hint banner.
+- The frontend never silently drops a 30s tick: if a tick is still in flight, the next one is queued and runs as soon as the current tick resolves.
+
+### Configuration knobs (Settings)
+
+Per-session, editable in the UI:
+
+- Live window seconds, tick cadence seconds.
+- Live and chat context token caps.
+- Live suggestions / card detail / card chat prompt overrides (leave blank to use the optimal defaults).
+
 ## Monorepo layout
 
 ```text

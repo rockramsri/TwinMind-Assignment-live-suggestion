@@ -48,12 +48,40 @@ function keywordTokens(text: string): Set<string> {
   );
 }
 
-function isCardCoveredByTranscript(card: SuggestionCard, chunks: TranscriptChunk[]): boolean {
-  // Card materialization timestamp is later than the transcript that inspired the
-  // card, so we look at all transcript chunks rather than only those newer than the
-  // card. To avoid false positives we still require either a clear overlap or a
-  // moderate overlap with a spoken-resolution signal.
-  const transcriptText = chunks.map((chunk) => chunk.text).join(" ").toLowerCase();
+const COMPLETION_PHRASES = [
+  "could you",
+  "can you",
+  "what are",
+  "explain",
+  "tell me",
+  "i asked",
+  "we asked",
+  "we covered",
+  "we discussed",
+  "as i said",
+  "as we discussed",
+  "answered",
+  "addressed",
+  "resolved",
+  "decided",
+  "confirmed",
+  "thank you",
+  "thanks"
+];
+
+function isCardCoveredByTranscript(
+  card: SuggestionCard,
+  chunks: TranscriptChunk[],
+  batchWindowEndMs: number | null
+): boolean {
+  // Coverage means: AFTER the card was generated, the transcript actually
+  // addresses or resolves it. Without this gate, the card is paraphrased from
+  // the very transcript that inspired it and would always look "covered".
+  if (batchWindowEndMs === null || batchWindowEndMs <= 0) {
+    return false;
+  }
+  const laterChunks = chunks.filter((chunk) => chunk.start_ms >= batchWindowEndMs);
+  const transcriptText = laterChunks.map((chunk) => chunk.text).join(" ").toLowerCase();
   if (!transcriptText.trim()) {
     return false;
   }
@@ -65,24 +93,13 @@ function isCardCoveredByTranscript(card: SuggestionCard, chunks: TranscriptChunk
   const overlap =
     [...intentTokens].filter((token) => transcriptTokens.has(token)).length /
     Math.max(1, intentTokens.size);
-  const spokenUsageSignals = [
-    "could you",
-    "can you",
-    "what are",
-    "explain",
-    "tell me",
-    "i asked",
-    "we asked",
-    "we covered",
-    "we discussed",
-    "as i said",
-    "as we discussed",
-    "answered",
-    "addressed",
-    "thank you",
-    "thanks"
-  ];
-  return overlap >= 0.65 || (overlap >= 0.4 && spokenUsageSignals.some((signal) => transcriptText.includes(signal)));
+  const hasCompletionSignal = COMPLETION_PHRASES.some((signal) =>
+    transcriptText.includes(signal)
+  );
+  // Confidence-tiered: require either reasonable overlap with a completion phrase
+  // or very strong overlap on its own. Avoids the previous 0.65-only path that
+  // marked every fresh card "covered" because card text echoes its own window.
+  return (overlap >= 0.55 && hasCompletionSignal) || overlap >= 0.8;
 }
 
 export default function HomePage() {
@@ -115,7 +132,9 @@ export default function HomePage() {
     setCountdown: setRefreshCountdown,
     isRefreshing,
     lastRefreshMs: measuredLastRefreshMs,
-    runTick
+    runTick,
+    lastTickMode,
+    cadenceHoldSecondsRemaining
   } = useSuggestionRefresh({
     sessionId,
     groqKey,
@@ -172,15 +191,29 @@ export default function HomePage() {
     () => splitCurrentAndOlderCards(suggestionBatches),
     [suggestionBatches]
   );
+  const cardWindowEndByCardId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const batch of suggestionBatches) {
+      for (const card of batch.cards) {
+        map.set(card.card_id, batch.window_end_ms);
+      }
+    }
+    return map;
+  }, [suggestionBatches]);
+
   const coveredCardIds = useMemo(() => {
     const ids = new Set<string>();
     for (const card of [...currentCards, ...olderCards]) {
-      if (usedCardIds.has(card.card_id) || isCardCoveredByTranscript(card, transcriptChunks)) {
+      const batchEndMs = cardWindowEndByCardId.get(card.card_id) ?? null;
+      if (
+        usedCardIds.has(card.card_id) ||
+        isCardCoveredByTranscript(card, transcriptChunks, batchEndMs)
+      ) {
         ids.add(card.card_id);
       }
     }
     return ids;
-  }, [currentCards, olderCards, transcriptChunks, usedCardIds]);
+  }, [cardWindowEndByCardId, currentCards, olderCards, transcriptChunks, usedCardIds]);
 
   return (
     <main className="flex h-screen flex-col">
@@ -207,6 +240,10 @@ export default function HomePage() {
       {errorMessage ? (
         <div className="border-b border-rose-700/60 bg-rose-950/60 px-4 py-2 text-sm text-rose-100">
           {errorMessage}
+        </div>
+      ) : lastTickMode === "cadence_hold" && cadenceHoldSecondsRemaining ? (
+        <div className="border-b border-amber-700/40 bg-amber-950/40 px-4 py-2 text-xs text-amber-100">
+          Server held the last tick. Next batch in ~{cadenceHoldSecondsRemaining}s. Use Refresh now to force one immediately.
         </div>
       ) : null}
 
