@@ -78,11 +78,17 @@ function isCardCoveredByTranscript(
   // addresses or resolves it. Without this gate, the card is paraphrased from
   // the very transcript that inspired it and would always look "covered".
   if (batchWindowEndMs === null || batchWindowEndMs <= 0) {
+    // #region agent log
+    fetch('http://127.0.0.1:7922/ingest/498196cb-7196-411f-ac04-180a71faaf8a',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d15a93'},body:JSON.stringify({sessionId:'d15a93',hypothesisId:'H1',location:'page.tsx:isCardCoveredByTranscript',message:'short-circuited because batchWindowEndMs invalid',data:{cardId:card.card_id,batchWindowEndMs},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     return false;
   }
   const laterChunks = chunks.filter((chunk) => chunk.start_ms >= batchWindowEndMs);
   const transcriptText = laterChunks.map((chunk) => chunk.text).join(" ").toLowerCase();
   if (!transcriptText.trim()) {
+    // #region agent log
+    fetch('http://127.0.0.1:7922/ingest/498196cb-7196-411f-ac04-180a71faaf8a',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d15a93'},body:JSON.stringify({sessionId:'d15a93',hypothesisId:'H2',location:'page.tsx:isCardCoveredByTranscript',message:'no later transcript text after batchWindowEndMs',data:{cardId:card.card_id,batchWindowEndMs,chunkCount:chunks.length,laterCount:laterChunks.length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     return false;
   }
   const intentTokens = keywordTokens(`${card.title} ${card.preview}`);
@@ -96,10 +102,14 @@ function isCardCoveredByTranscript(
   const hasCompletionSignal = COMPLETION_PHRASES.some((signal) =>
     transcriptText.includes(signal)
   );
+  const covered = (overlap >= 0.55 && hasCompletionSignal) || overlap >= 0.8;
+  // #region agent log
+  fetch('http://127.0.0.1:7922/ingest/498196cb-7196-411f-ac04-180a71faaf8a',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d15a93'},body:JSON.stringify({sessionId:'d15a93',hypothesisId:'H2-H4',location:'page.tsx:isCardCoveredByTranscript',message:'evaluated overlap',data:{cardId:card.card_id,batchWindowEndMs,intentTokenCount:intentTokens.size,transcriptTokenCount:transcriptTokens.size,overlap:Number(overlap.toFixed(3)),hasCompletionSignal,covered},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   // Confidence-tiered: require either reasonable overlap with a completion phrase
   // or very strong overlap on its own. Avoids the previous 0.65-only path that
   // marked every fresh card "covered" because card text echoes its own window.
-  return (overlap >= 0.55 && hasCompletionSignal) || overlap >= 0.8;
+  return covered;
 }
 
 export default function HomePage() {
